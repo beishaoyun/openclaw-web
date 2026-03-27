@@ -24,7 +24,7 @@
 ### 1. 克隆项目
 
 ```bash
-git clone https://github.com/your-org/openclaw-web.git
+git clone https://github.com/beishaoyun/openclaw-web.git
 cd openclaw-web
 ```
 
