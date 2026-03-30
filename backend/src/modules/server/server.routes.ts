@@ -156,53 +156,56 @@ export async function serverRoutes(app: FastifyInstance) {
 
       const server = servers[0];
 
-      // 异步更新 SSH 状态和 OpenClaw 状态
-      (async () => {
-        const conn = new Client();
+      // 同步进行 SSH 验证（10 秒超时）
+      const conn = new Client();
+      try {
+        await new Promise<void>((resolve, reject) => {
+          conn.connect({
+            host: server.public_ip,
+            port: server.ssh_port || 22,
+            username: server.ssh_user,
+            password: server.ssh_password,
+            readyTimeout: 10000,
+          });
+          conn.on('ready', () => resolve()).on('error', reject);
+        });
+
+        // SSH 连接成功，更新状态
+        await db`UPDATE servers SET ssh_status = 'online', updated_at = NOW() WHERE id = ${id}`;
+        server.ssh_status = 'online';
+
+        // 检查 OpenClaw 是否安装
         try {
-          await new Promise<void>((resolve, reject) => {
-            conn.connect({
-              host: server.public_ip,
-              port: server.ssh_port || 22,
-              username: server.ssh_user,
-              password: server.ssh_password,
-              readyTimeout: 10000,
+          const versionOutput = await new Promise<string>((resolve, reject) => {
+            conn.exec('openclaw -v 2>&1', (err, stream) => {
+              if (err) reject(err);
+              let output = '';
+              stream.on('data', (data) => output += data.toString());
+              stream.on('close', () => resolve(output.trim()));
             });
-            conn.on('ready', () => resolve()).on('error', reject);
           });
 
-          // SSH 连接成功，更新状态
-          await db`UPDATE servers SET ssh_status = 'online', updated_at = NOW() WHERE id = ${id}`;
-
-          // 检查 OpenClaw 是否安装
-          try {
-            const versionOutput = await new Promise<string>((resolve, reject) => {
-              conn.exec('openclaw -v 2>&1', (err, stream) => {
-                if (err) reject(err);
-                let output = '';
-                stream.on('data', (data) => output += data.toString());
-                stream.on('close', () => resolve(output.trim()));
-              });
-            });
-
-            if (versionOutput.includes('OpenClaw')) {
-              // 已安装，检查是否运行中
-              await db`UPDATE servers SET openclaw_status = 'installed', updated_at = NOW() WHERE id = ${id}`;
-            } else {
-              await db`UPDATE servers SET openclaw_status = 'not_installed', updated_at = NOW() WHERE id = ${id}`;
-            }
-          } catch (e) {
-            // openclaw 命令不存在
+          if (versionOutput.includes('OpenClaw')) {
+            await db`UPDATE servers SET openclaw_status = 'installed', updated_at = NOW() WHERE id = ${id}`;
+            server.openclaw_status = 'installed';
+          } else {
             await db`UPDATE servers SET openclaw_status = 'not_installed', updated_at = NOW() WHERE id = ${id}`;
+            server.openclaw_status = 'not_installed';
           }
-
-          conn.end();
-        } catch (err) {
-          // SSH 连接失败
-          await db`UPDATE servers SET ssh_status = 'offline', updated_at = NOW() WHERE id = ${id}`;
-          await db`UPDATE servers SET openclaw_status = 'unknown', updated_at = NOW() WHERE id = ${id}`;
+        } catch (e) {
+          // openclaw 命令不存在
+          await db`UPDATE servers SET openclaw_status = 'not_installed', updated_at = NOW() WHERE id = ${id}`;
+          server.openclaw_status = 'not_installed';
         }
-      })();
+
+        conn.end();
+      } catch (err) {
+        // SSH 连接失败
+        await db`UPDATE servers SET ssh_status = 'offline', updated_at = NOW() WHERE id = ${id}`;
+        await db`UPDATE servers SET openclaw_status = 'unknown', updated_at = NOW() WHERE id = ${id}`;
+        server.ssh_status = 'offline';
+        server.openclaw_status = 'unknown';
+      }
 
       return { data: server };
     } catch (err: any) {
