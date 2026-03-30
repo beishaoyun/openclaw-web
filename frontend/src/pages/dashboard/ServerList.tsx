@@ -56,6 +56,19 @@ export default function ServerList() {
       const serversData = response.data?.data || [];
       setServers(serversData);
 
+      // 异步刷新每个服务器的实时状态（不阻塞 UI）
+      serversData.forEach(async (server: Server) => {
+        try {
+          const detail = await serverService.get(server.id);
+          const freshData = detail.data?.data;
+          if (freshData) {
+            setServers(prev => prev.map(s => s.id === server.id ? freshData : s));
+          }
+        } catch (err) {
+          console.error(`Failed to refresh server ${server.id}:`, err);
+        }
+      });
+
       // 从 localStorage 加载上次的验证状态
       const savedStatus = localStorage.getItem('sshVerifyStatus');
       if (savedStatus) {
