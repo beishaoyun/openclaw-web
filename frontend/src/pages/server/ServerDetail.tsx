@@ -414,8 +414,10 @@ export default function ServerDetail() {
               }`} />
               <span className="text-sm font-medium text-zinc-900">
                 {server.openclaw_status === 'running' ? 'OpenClaw 运行中' :
-                 server.openclaw_status === 'error' ? 'OpenClaw 错误' :
-                 server.openclaw_status === 'not_installed' ? '未安装 OpenClaw' : '已安装（已停止）'}
+                 server.openclaw_status === 'stopped' ? '已安装（已停止）' :
+                 server.openclaw_status === 'not_installed' ? '未安装 OpenClaw' :
+                 server.openclaw_status === 'unknown' ? 'SSH 连接失败，无法检测' :
+                 server.openclaw_status === 'error' ? 'OpenClaw 错误' : '检测中...'}
               </span>
               {openclawVersion && !openclawVersion.latest && (
                 <span className="text-xs bg-yellow-100 text-yellow-700 px-2 py-0.5 rounded-full">
@@ -484,7 +486,7 @@ export default function ServerDetail() {
       </div>
 
       {/* OpenClaw Management - Models, Channels, Skills */}
-      {server.openclaw_status !== 'not_installed' && (
+      {(server.openclaw_status === 'running' || server.openclaw_status === 'stopped') && (
         <div className="grid grid-cols-3 gap-6 mt-6">
           {/* 1. 模型 (Models) */}
           <Card className="flex flex-col">
