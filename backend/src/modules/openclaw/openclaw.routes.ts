@@ -245,6 +245,26 @@ export async function openclawRoutes(app: FastifyInstance) {
       throw new Error('环境检测失败：' + err.message);
     }
 
+    // 先测试 SSH 连接，避免创建任务后无法连接
+    const testConn = new Client();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        testConn.connect({
+          host: server.public_ip,
+          port: server.ssh_port || 22,
+          username: server.ssh_user,
+          password: server.ssh_password,
+          readyTimeout: 15000,
+        });
+        testConn.on('ready', () => resolve());
+        testConn.on('error', (err) => reject(new Error('SSH 连接失败：' + err.message)));
+        testConn.on('timeout', () => reject(new Error('SSH 连接超时')));
+      });
+      testConn.end();
+    } catch (err: any) {
+      throw new Error('无法连接到服务器，请检查 SSH 配置：' + err.message);
+    }
+
     // 创建安装任务
     const taskResult = await db`
       INSERT INTO install_tasks (server_id, user_id, status, current_step, total_steps, install_method, logs)
