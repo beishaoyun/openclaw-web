@@ -127,7 +127,7 @@ export async function serverRoutes(app: FastifyInstance) {
     try {
       const result = await db`
         INSERT INTO servers (user_id, name, public_ip, ssh_port, ssh_user, ssh_password, status, ssh_status, openclaw_status)
-        VALUES (${userId}, ${name || null}, ${host}, ${port || 22}, ${username}, ${password}, 'unknown', 'unknown', 'unknown')
+        VALUES (${userId}, ${name || null}, ${host}, ${port || 22}, ${username}, ${password}, 'unknown', 'unknown', 'not_installed')
         RETURNING *
       `;
 
