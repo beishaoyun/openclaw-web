@@ -408,8 +408,10 @@ export default function ServerDetail() {
             <div className="flex items-center gap-3">
               <div className={`w-3 h-3 rounded-full ${
                 server.openclaw_status === 'running' ? 'bg-green-500' :
-                server.openclaw_status === 'error' ? 'bg-red-500' :
+                server.openclaw_status === 'stopped' ? 'bg-yellow-500' :
                 server.openclaw_status === 'not_installed' ? 'bg-zinc-400' :
+                server.openclaw_status === 'unknown' ? 'bg-zinc-300' :
+                server.openclaw_status === 'error' ? 'bg-red-500' :
                 'bg-yellow-500'
               }`} />
               <span className="text-sm font-medium text-zinc-900">

@@ -289,17 +289,23 @@ export default function ServerList() {
                     <p className="text-xs mt-1 flex items-center gap-2">
                       <span className={`inline-block w-2 h-2 rounded-full ${
                         server.openclaw_status === 'running' ? 'bg-green-500' :
+                        server.openclaw_status === 'stopped' ? 'bg-yellow-500' :
                         server.openclaw_status === 'not_installed' ? 'bg-zinc-400' :
+                        server.openclaw_status === 'unknown' ? 'bg-zinc-300' :
                         server.openclaw_status === 'error' ? 'bg-red-500' :
                         'bg-yellow-500'
                       }`} />
                       <span className={
                         server.openclaw_status === 'running' ? 'text-green-600' :
+                        server.openclaw_status === 'stopped' ? 'text-yellow-600' :
                         server.openclaw_status === 'not_installed' ? 'text-zinc-500' :
+                        server.openclaw_status === 'unknown' ? 'text-zinc-400' :
                         'text-red-600'
                       }>
                         {server.openclaw_status === 'running' ? 'OpenClaw 运行中' :
+                         server.openclaw_status === 'stopped' ? '已安装（已停止）' :
                          server.openclaw_status === 'not_installed' ? '未安装 OpenClaw' :
+                         server.openclaw_status === 'unknown' ? 'SSH 连接失败' :
                          server.openclaw_status === 'error' ? 'OpenClaw 错误' : '已安装'}
                       </span>
                     </p>
