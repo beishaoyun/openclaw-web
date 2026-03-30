@@ -18,6 +18,7 @@ import InstallProgress from './pages/server/InstallProgress';
 // OpenClaw pages
 import OpenClawStatus from './pages/openclaw/OpenClawStatus';
 import ConfigEditor from './pages/openclaw/ConfigEditor';
+import OpenClawDashboard from './pages/openclaw/OpenClawDashboard';
 
 // Model/Channel/Skill pages
 import ModelManager from './pages/model/ModelManager';
@@ -135,7 +136,7 @@ function App() {
                   <div className="flex">
                     <Sidebar />
                     <main className="flex-1 p-6 overflow-auto">
-                      <OpenClawStatus />
+                      <OpenClawDashboard />
                     </main>
                   </div>
                 </div>

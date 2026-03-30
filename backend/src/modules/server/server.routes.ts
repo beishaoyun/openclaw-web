@@ -1,6 +1,7 @@
 import { FastifyInstance, FastifyRequest } from 'fastify';
 import { authMiddleware } from '../../middleware/auth';
 import { getSql } from '../../database';
+import { Client, ConnectConfig } from 'ssh2';
 
 interface AddServerBody {
   name: string;
@@ -8,6 +9,82 @@ interface AddServerBody {
   port: number;
   username: string;
   password: string;
+}
+
+// SSH 连接池（简单实现，生产环境应使用连接池库）
+const sshConnectionPool = new Map<string, Client>();
+
+// 获取 SSH 连接
+async function getSshConnection(server: any): Promise<Client> {
+  const cacheKey = `ssh:${server.id}`;
+
+  // 检查是否有现有连接
+  const existingConn = sshConnectionPool.get(cacheKey);
+  if (existingConn) {
+    return existingConn;
+  }
+
+  return new Promise((resolve, reject) => {
+    const conn = new Client();
+    const config: ConnectConfig = {
+      host: server.public_ip,
+      port: server.ssh_port || 22,
+      username: server.ssh_user,
+      password: server.ssh_password,
+      readyTimeout: 10000,
+      tryKeyboard: true,
+    };
+
+    conn.on('ready', () => {
+      sshConnectionPool.set(cacheKey, conn);
+      resolve(conn);
+    }).on('error', (err) => {
+      reject(new Error('SSH 连接失败：' + err.message));
+    });
+
+    conn.connect(config);
+  });
+}
+
+// 关闭 SSH 连接
+function closeSshConnection(serverId: string) {
+  const cacheKey = `ssh:${serverId}`;
+  const conn = sshConnectionPool.get(cacheKey);
+  if (conn) {
+    conn.end();
+    sshConnectionPool.delete(cacheKey);
+  }
+}
+
+// 执行 SSH 命令
+async function executeSshCommand(server: any, command: string): Promise<string> {
+  const conn = await getSshConnection(server);
+
+  return new Promise((resolve, reject) => {
+    conn.exec(command, (err, stream) => {
+      if (err) {
+        reject(new Error('命令执行失败：' + err.message));
+        return;
+      }
+
+      let output = '';
+      let errorOutput = '';
+
+      stream.on('close', (code: number) => {
+        if (code === 0) {
+          resolve(output.trim());
+        } else {
+          reject(new Error(`命令执行失败，退出码：${code}, ${errorOutput}`));
+        }
+      }).stderr.on('data', (data: Buffer) => {
+        errorOutput += data.toString();
+      });
+
+      stream.stdout.on('data', (data: Buffer) => {
+        output += data.toString();
+      });
+    });
+  });
 }
 
 export async function serverRoutes(app: FastifyInstance) {
@@ -77,7 +154,57 @@ export async function serverRoutes(app: FastifyInstance) {
         throw new Error('服务器不存在');
       }
 
-      return { data: servers[0] };
+      const server = servers[0];
+
+      // 异步更新 SSH 状态和 OpenClaw 状态
+      (async () => {
+        const conn = new Client();
+        try {
+          await new Promise<void>((resolve, reject) => {
+            conn.connect({
+              host: server.public_ip,
+              port: server.ssh_port || 22,
+              username: server.ssh_user,
+              password: server.ssh_password,
+              readyTimeout: 10000,
+            });
+            conn.on('ready', () => resolve()).on('error', reject);
+          });
+
+          // SSH 连接成功，更新状态
+          await db`UPDATE servers SET ssh_status = 'online', updated_at = NOW() WHERE id = ${id}`;
+
+          // 检查 OpenClaw 是否安装
+          try {
+            const versionOutput = await new Promise<string>((resolve, reject) => {
+              conn.exec('openclaw -v 2>&1', (err, stream) => {
+                if (err) reject(err);
+                let output = '';
+                stream.on('data', (data) => output += data.toString());
+                stream.on('close', () => resolve(output.trim()));
+              });
+            });
+
+            if (versionOutput.includes('OpenClaw')) {
+              // 已安装，检查是否运行中
+              await db`UPDATE servers SET openclaw_status = 'installed', updated_at = NOW() WHERE id = ${id}`;
+            } else {
+              await db`UPDATE servers SET openclaw_status = 'not_installed', updated_at = NOW() WHERE id = ${id}`;
+            }
+          } catch (e) {
+            // openclaw 命令不存在
+            await db`UPDATE servers SET openclaw_status = 'not_installed', updated_at = NOW() WHERE id = ${id}`;
+          }
+
+          conn.end();
+        } catch (err) {
+          // SSH 连接失败
+          await db`UPDATE servers SET ssh_status = 'offline', updated_at = NOW() WHERE id = ${id}`;
+          await db`UPDATE servers SET openclaw_status = 'unknown', updated_at = NOW() WHERE id = ${id}`;
+        }
+      })();
+
+      return { data: server };
     } catch (err: any) {
       console.error('Failed to get server:', err);
       throw new Error('获取服务器失败：' + err.message);
@@ -147,7 +274,7 @@ export async function serverRoutes(app: FastifyInstance) {
 
     try {
       const servers = await db`
-        SELECT public_ip, ssh_port, ssh_user, ssh_password FROM servers
+        SELECT * FROM servers
         WHERE id = ${id} AND user_id = ${userId}
       `;
 
@@ -156,15 +283,190 @@ export async function serverRoutes(app: FastifyInstance) {
       }
 
       const server = servers[0];
-      // TODO: 实现实际的 SSH 连接测试
-      // 这里只是模拟测试成功
-      return {
-        success: true,
-        message: `SSH 连接测试成功：${server.ssh_user}@${server.public_ip}:${server.ssh_port}`
-      };
+      const conn = new Client();
+
+      return new Promise((resolve, reject) => {
+        conn.on('ready', () => {
+          // 测试成功后获取服务器基本信息
+          conn.exec('uname -a', (err, stream) => {
+            if (err) {
+              conn.end();
+              resolve({
+                success: true,
+                message: `SSH 连接测试成功：${server.ssh_user}@${server.public_ip}:${server.ssh_port}`,
+                osInfo: '未知',
+              });
+              return;
+            }
+
+            let osInfo = '';
+            stream.on('data', (data: Buffer) => {
+              osInfo += data.toString();
+            }).on('close', () => {
+              conn.end();
+              resolve({
+                success: true,
+                message: `SSH 连接测试成功：${server.ssh_user}@${server.public_ip}:${server.ssh_port}`,
+                osInfo: osInfo.trim().split('\n')[0] || '未知',
+              });
+            });
+          });
+        }).on('error', (err) => {
+          console.error('SSH connection error:', err);
+          reject(new Error('SSH 连接失败：' + err.message));
+        });
+
+        conn.connect({
+          host: server.public_ip,
+          port: server.ssh_port || 22,
+          username: server.ssh_user,
+          password: server.ssh_password,
+          readyTimeout: 10000,
+          tryKeyboard: true,
+        });
+      });
     } catch (err: any) {
       console.error('SSH test failed:', err);
       return { success: false, message: 'SSH 连接测试失败：' + err.message };
+    }
+  });
+
+  // 验证 SSH 账号密码（独立接口）
+  app.post('/:id/verify-credentials', { preHandler: [authMiddleware] }, async (request) => {
+    const db = getSql();
+    const userId = (request.user as any).id;
+    const { id } = request.params as { id: string };
+
+    try {
+      const servers = await db`
+        SELECT * FROM servers
+        WHERE id = ${id} AND user_id = ${userId}
+      `;
+
+      if (servers.length === 0) {
+        throw new Error('服务器不存在');
+      }
+
+      const server = servers[0];
+      const conn = new Client();
+
+      return new Promise((resolve) => {
+        const startTime = Date.now();
+
+        conn.on('ready', () => {
+          const duration = Date.now() - startTime;
+          // 获取系统信息
+          conn.exec('cat /etc/os-release 2>/dev/null || uname -a', (err, stream) => {
+            let osInfo = '';
+            if (!err) {
+              stream.on('data', (data: Buffer) => {
+                osInfo += data.toString();
+              });
+            }
+            conn.end();
+
+            resolve({
+              success: true,
+              verified: true,
+              message: '账号密码验证成功',
+              responseTime: duration,
+              osInfo: osInfo.trim().split('\n').find(line => line.startsWith('PRETTY_NAME'))?.split('=')[1]?.replace(/"/g, '') || osInfo.trim().split('\n')[0] || '未知',
+            });
+          });
+        }).on('error', (err) => {
+          conn.end();
+          resolve({
+            success: false,
+            verified: false,
+            message: '账号密码验证失败：' + err.message,
+            error: err.message,
+          });
+        });
+
+        conn.connect({
+          host: server.public_ip,
+          port: server.ssh_port || 22,
+          username: server.ssh_user,
+          password: server.ssh_password,
+          readyTimeout: 10000,
+          tryKeyboard: true,
+        });
+      });
+    } catch (err: any) {
+      console.error('Credential verification failed:', err);
+      return { success: false, verified: false, message: '验证失败：' + err.message };
+    }
+  });
+
+  // 批量验证所有服务器
+  app.post('/batch/verify-all', { preHandler: [authMiddleware] }, async (request) => {
+    const db = getSql();
+    const userId = (request.user as any).id;
+
+    try {
+      const servers = await db`
+        SELECT * FROM servers
+        WHERE user_id = ${userId}
+      `;
+
+      const results = [];
+      for (const server of servers) {
+        const conn = new Client();
+        const result = await new Promise((resolve) => {
+          conn.on('ready', () => {
+            conn.exec('cat /etc/os-release 2>/dev/null | grep PRETTY_NAME', (err, stream) => {
+              let osInfo = '';
+              if (!err) {
+                stream.on('data', (data: Buffer) => osInfo += data.toString());
+              }
+              conn.end();
+              resolve({
+                id: server.id,
+                name: server.name,
+                success: true,
+                osInfo: osInfo.trim().replace('PRETTY_NAME=', '').replace(/"/g, '') || '未知',
+              });
+            });
+          }).on('error', () => {
+            conn.end();
+            resolve({
+              id: server.id,
+              name: server.name,
+              success: false,
+              osInfo: null,
+            });
+          });
+
+          conn.connect({
+            host: server.public_ip,
+            port: server.ssh_port || 22,
+            username: server.ssh_user,
+            password: server.ssh_password,
+            readyTimeout: 8000,
+            tryKeyboard: true,
+          });
+        });
+        results.push(result);
+      }
+
+      // 更新数据库中的 SSH 状态
+      for (const result of results) {
+        await db`
+          UPDATE servers
+          SET ssh_status = ${result.success ? 'online' : 'offline'},
+              updated_at = NOW()
+          WHERE id = ${result.id}
+        `;
+      }
+
+      return {
+        data: results,
+        success: results.filter(r => r.success).length,
+        failed: results.filter(r => !r.success).length,
+      };
+    } catch (err: any) {
+      console.error('Batch verification failed:', err);
+      throw new Error('批量验证失败：' + err.message);
     }
   });
 
@@ -176,7 +478,7 @@ export async function serverRoutes(app: FastifyInstance) {
 
     try {
       const servers = await db`
-        SELECT id FROM servers
+        SELECT * FROM servers
         WHERE id = ${id} AND user_id = ${userId}
       `;
 
@@ -184,8 +486,18 @@ export async function serverRoutes(app: FastifyInstance) {
         throw new Error('服务器不存在');
       }
 
-      // TODO: 实现实际的 SSH 重启命令
-      return { message: '重启命令已发送' };
+      const server = servers[0];
+
+      // 执行重启命令（后台执行，避免连接被中断）
+      await executeSshCommand(server, 'nohup sh -c "sleep 2 && reboot" > /dev/null 2>&1 &');
+
+      // 更新服务器状态
+      await db`
+        UPDATE servers SET status = 'rebooting', updated_at = NOW()
+        WHERE id = ${id}
+      `;
+
+      return { message: '重启命令已发送，服务器将在 2 分钟后重启' };
     } catch (err: any) {
       console.error('Failed to reboot:', err);
       throw new Error('重启失败：' + err.message);
@@ -200,7 +512,7 @@ export async function serverRoutes(app: FastifyInstance) {
 
     try {
       const servers = await db`
-        SELECT id FROM servers
+        SELECT * FROM servers
         WHERE id = ${id} AND user_id = ${userId}
       `;
 
@@ -208,7 +520,20 @@ export async function serverRoutes(app: FastifyInstance) {
         throw new Error('服务器不存在');
       }
 
-      // TODO: 实现实际的 SSH 关机命令
+      const server = servers[0];
+
+      // 执行关机命令
+      await executeSshCommand(server, 'shutdown -h now');
+
+      // 更新服务器状态
+      await db`
+        UPDATE servers SET status = 'shutdown', updated_at = NOW()
+        WHERE id = ${id}
+      `;
+
+      // 关闭连接池中的连接
+      closeSshConnection(id);
+
       return { message: '关机命令已发送' };
     } catch (err: any) {
       console.error('Failed to shutdown:', err);
@@ -223,19 +548,75 @@ export async function serverRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
 
     try {
-      const result = await db`
-        UPDATE servers
-        SET last_checked_at = NOW(),
-            updated_at = NOW()
+      const servers = await db`
+        SELECT * FROM servers
         WHERE id = ${id} AND user_id = ${userId}
-        RETURNING *
       `;
 
-      if (result.length === 0) {
+      if (servers.length === 0) {
         throw new Error('服务器不存在');
       }
 
-      return { data: result[0], message: '状态已刷新' };
+      const server = servers[0];
+      let metrics: any = { cpu_usage: 0, memory_usage: 0, disk_usage: 0 };
+
+      try {
+        // 获取 CPU 使用率
+        const cpuUsage = await executeSshCommand(server, "top -bn1 | grep 'Cpu(s)' | awk '{print $2}' | cut -d'%' -f1");
+
+        // 获取内存使用率
+        const memInfo = await executeSshCommand(server, "free | grep Mem | awk '{printf \"%.1f\", $3/$2 * 100}'");
+
+        // 获取磁盘使用率
+        const diskUsage = await executeSshCommand(server, "df -h / | awk 'NR==2 {print $5}' | cut -d'%' -f1");
+
+        metrics = {
+          cpu_usage: parseFloat(cpuUsage) || 0,
+          memory_usage: parseFloat(memInfo) || 0,
+          disk_usage: parseFloat(diskUsage) || 0,
+        };
+
+        // 更新服务器监控数据
+        await db`
+          UPDATE servers
+          SET cpu_usage = ${metrics.cpu_usage},
+              memory_usage = ${metrics.memory_usage},
+              disk_usage = ${metrics.disk_usage},
+              last_checked_at = NOW(),
+              updated_at = NOW()
+          WHERE id = ${id}
+        `;
+
+        // 记录监控历史
+        await db`
+          INSERT INTO server_metrics (server_id, cpu_usage, memory_used, memory_total, disk_used, disk_total, load_1m)
+          VALUES (
+            ${id},
+            ${metrics.cpu_usage},
+            ${Math.round(metrics.memory_usage * 100)},
+            100,
+            ${Math.round(metrics.disk_usage * 100)},
+            100,
+            ${metrics.cpu_usage}
+          )
+        `;
+
+      } catch (sshErr) {
+        console.warn('Failed to get server metrics via SSH:', sshErr);
+        // SSH 失败时仅更新时间戳
+        await db`
+          UPDATE servers SET last_checked_at = NOW(), updated_at = NOW()
+          WHERE id = ${id}
+        `;
+      }
+
+      return {
+        data: {
+          ...server,
+          ...metrics,
+        },
+        message: '状态已刷新',
+      };
     } catch (err: any) {
       console.error('Failed to refresh:', err);
       throw new Error('刷新失败：' + err.message);
@@ -249,13 +630,35 @@ export async function serverRoutes(app: FastifyInstance) {
     const { ids } = request.body as { ids: string[] };
 
     try {
-      await db`
-        UPDATE servers
-        SET updated_at = NOW()
+      const servers = await db`
+        SELECT * FROM servers
         WHERE id = ANY(${ids}) AND user_id = ${userId}
       `;
 
-      return { message: '批量重启已启动' };
+      if (servers.length === 0) {
+        throw new Error('没有找到服务器');
+      }
+
+      // 串行执行重启命令（避免并发 SSH 连接过多）
+      const results = [];
+      for (const server of servers) {
+        try {
+          await executeSshCommand(server, 'nohup sh -c "sleep 2 && reboot" > /dev/null 2>&1 &');
+          results.push({ id: server.id, status: 'success' });
+
+          await db`
+            UPDATE servers SET status = 'rebooting', updated_at = NOW()
+            WHERE id = ${server.id}
+          `;
+        } catch (err: any) {
+          results.push({ id: server.id, status: 'failed', error: err.message });
+        }
+      }
+
+      return {
+        message: `批量重启完成：${results.filter(r => r.status === 'success').length}/${servers.length} 成功`,
+        results,
+      };
     } catch (err: any) {
       console.error('Failed to batch reboot:', err);
       throw new Error('批量重启失败：' + err.message);
@@ -269,13 +672,37 @@ export async function serverRoutes(app: FastifyInstance) {
     const { ids } = request.body as { ids: string[] };
 
     try {
-      await db`
-        UPDATE servers
-        SET updated_at = NOW()
+      const servers = await db`
+        SELECT * FROM servers
         WHERE id = ANY(${ids}) AND user_id = ${userId}
       `;
 
-      return { message: '批量关机已启动' };
+      if (servers.length === 0) {
+        throw new Error('没有找到服务器');
+      }
+
+      // 串行执行关机命令
+      const results = [];
+      for (const server of servers) {
+        try {
+          await executeSshCommand(server, 'shutdown -h now');
+          results.push({ id: server.id, status: 'success' });
+
+          await db`
+            UPDATE servers SET status = 'shutdown', updated_at = NOW()
+            WHERE id = ${server.id}
+          `;
+
+          closeSshConnection(server.id);
+        } catch (err: any) {
+          results.push({ id: server.id, status: 'failed', error: err.message });
+        }
+      }
+
+      return {
+        message: `批量关机完成：${results.filter(r => r.status === 'success').length}/${servers.length} 成功`,
+        results,
+      };
     } catch (err: any) {
       console.error('Failed to batch shutdown:', err);
       throw new Error('批量关机失败：' + err.message);
@@ -307,6 +734,33 @@ export async function serverRoutes(app: FastifyInstance) {
     } catch (err: any) {
       console.error('Failed to get metrics:', err);
       throw new Error('获取监控数据失败：' + err.message);
+    }
+  });
+
+  // 执行 SSH 命令
+  app.post('/:id/execute', { preHandler: [authMiddleware] }, async (request) => {
+    const db = getSql();
+    const userId = (request.user as any).id;
+    const { id } = request.params as { id: string };
+    const { command } = request.body as { command: string };
+
+    try {
+      const servers = await db`
+        SELECT * FROM servers
+        WHERE id = ${id} AND user_id = ${userId}
+      `;
+
+      if (servers.length === 0) {
+        throw new Error('服务器不存在');
+      }
+
+      const server = servers[0];
+      const result = await executeSshCommand(server, command);
+
+      return { data: result, message: '命令执行成功' };
+    } catch (err: any) {
+      console.error('Failed to execute command:', err);
+      throw new Error('命令执行失败：' + err.message);
     }
   });
 }

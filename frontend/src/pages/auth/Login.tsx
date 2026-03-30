@@ -39,14 +39,9 @@ export default function Login() {
     setIsLoading(true);
 
     try {
-      const { data } = await authService.login({
-        account: formData.account,
-        password: formData.password,
-        captcha: formData.captcha,
-        rememberMe: formData.rememberMe,
-      });
+      const { data } = await authService.login(formData);
       localStorage.setItem('token', data.token);
-      setToken(data.token, { id: 'user-id', email: data.email || '' });
+      setToken(data.token, data.user);
       navigate('/');
     } catch (err: any) {
       setError(err.response?.data?.message || '登录失败');

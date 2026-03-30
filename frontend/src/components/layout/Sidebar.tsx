@@ -3,9 +3,6 @@ import { NavLink, useLocation } from 'react-router-dom';
 const navigation = [
   { name: '📊 控制台', href: '/' },
   { name: '🖥️ 服务器', href: '/servers' },
-  { name: '🤖 模型', href: '/models' },
-  { name: '🔌 通道', href: '/channels' },
-  { name: '⚡ 技能', href: '/skills' },
 ];
 
 export function Sidebar() {

@@ -21,11 +21,13 @@
     "@fastify/swagger": "^8.14.0",
     "@fastify/websocket": "^10.0.0",
     "bcrypt": "^5.1.1",
+    "dotenv": "^17.3.1",
     "fastify": "^4.25.2",
     "ioredis": "^5.3.2",
     "pino": "^8.18.0",
     "pino-pretty": "^10.3.1",
     "postgres": "^3.4.3",
+    "ssh2": "^1.17.0",
     "zod": "^3.22.4"
   },
   "devDependencies": {

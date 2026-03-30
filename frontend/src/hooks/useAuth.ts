@@ -14,7 +14,12 @@ export function useAuth() {
     try {
       const { data } = await authService.login({ account, password, captcha, rememberMe });
       localStorage.setItem('token', data.token);
-      setToken(data.token, { id: 'user-id' }); // TODO: 解析实际用户信息
+      // 使用后端返回的实际用户信息
+      setToken(data.token, {
+        id: data.user?.id,
+        email: data.user?.email,
+        phone: data.user?.phone,
+      });
       return { success: true };
     } catch (err: any) {
       setError(err.response?.data?.message || '登录失败');

@@ -86,6 +86,19 @@ export default function ModelManager() {
 
   const getProviderIcon = (provider: string) => {
     switch (provider) {
+      case 'volcengine':
+      case 'aliyun':
+      case 'deepseek':
+      case 'moonshot':
+      case 'zhipu':
+      case 'baichuan':
+      case 'stepfun':
+      case '01ai':
+        return (
+          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3.055 11H5a2 2 0 012 2v1a2 2 0 002 2 2 2 0 012 2v2.945M8 3.935V5.5A2.5 2.5 0 0010.5 8h.5a2 2 0 012 2 2 2 0 104 0 2 2 0 012-2h1.064M15 20.488V18a2 2 0 012-2h3.064M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+          </svg>
+        );
       case 'openai':
         return (
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -149,6 +162,8 @@ export default function ModelManager() {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-4">
                   <div className={`w-10 h-10 rounded-lg flex items-center justify-center ${
+                    ['volcengine', 'aliyun', 'deepseek', 'moonshot', 'zhipu', 'baichuan', 'stepfun', '01ai'].includes(model.provider)
+                      ? 'bg-blue-100 text-blue-600' :
                     model.provider === 'openai' ? 'bg-green-100 text-green-600' :
                     model.provider === 'anthropic' ? 'bg-orange-100 text-orange-600' :
                     'bg-zinc-100 text-zinc-600'
@@ -223,13 +238,43 @@ export default function ModelManager() {
             </label>
             <select
               value={formData.provider}
-              onChange={(e) => setFormData({ ...formData, provider: e.target.value })}
+              onChange={(e) => {
+                const provider = e.target.value;
+                const baseUrlMap: Record<string, string> = {
+                  volcengine: 'https://ark.cn-beijing.volces.com/api/v3',
+                  aliyun: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
+                  deepseek: 'https://api.deepseek.com/v1',
+                  openai: 'https://api.openai.com/v1',
+                  anthropic: 'https://api.anthropic.com/v1',
+                  moonshot: 'https://api.moonshot.cn/v1',
+                  minimax: 'https://api.minimax.chat/v1',
+                  zhipu: 'https://open.bigmodel.cn/api/paas/v4',
+                  baichuan: 'https://api.baichuan-ai.com/v1',
+                  stepfun: 'https://api.stepfun.com/v1',
+                  '01ai': 'https://api.lingyiwanwu.com/v1',
+                  xai: 'https://api.x.ai/v1',
+                };
+                setFormData({
+                  ...formData,
+                  provider,
+                  baseUrl: baseUrlMap[provider] || ''
+                });
+              }}
               className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
             >
+              <option value="volcengine">火山引擎</option>
+              <option value="aliyun">阿里云百炼</option>
+              <option value="deepseek">DeepSeek</option>
               <option value="openai">OpenAI</option>
               <option value="anthropic">Anthropic</option>
               <option value="azure">Azure OpenAI</option>
-              <option value="custom">自定义</option>
+              <option value="moonshot">月之暗面</option>
+              <option value="minimax">MiniMax</option>
+              <option value="zhipu">智谱 AI</option>
+              <option value="baichuan">百川智能</option>
+              <option value="stepfun">阶跃星辰</option>
+              <option value="01ai">零一万物</option>
+              <option value="xai">xAI</option>
             </select>
           </div>
           <Input

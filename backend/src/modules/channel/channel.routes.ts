@@ -4,14 +4,8 @@ import { getSql } from '../../database';
 
 interface AddChannelBody {
   name?: string;
-  channel_type: string;
-  base_url?: string;
-  auth_type?: string;
-  app_id?: string;
-  app_secret?: string;
-  bot_name?: string;
-  webhook_url?: string;
-  is_default?: boolean;
+  type: string;
+  config?: Record<string, any>;
 }
 
 const CHANNEL_TEMPLATES = [
@@ -112,6 +106,20 @@ const CHANNEL_TEMPLATES = [
   }
 ];
 
+// 根据模板类型获取默认 base_url
+function getTemplateBaseUrl(template: any): string | null {
+  const baseUrlMap: Record<string, string> = {
+    feishu: 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal',
+    dingtalk: 'https://api.dingtalk.com/v1.0/oauth2/accessToken',
+    wechat: 'https://api.weixin.qq.com/cgi-bin/token',
+    wecom: 'https://qyapi.weixin.qq.com/cgi-bin/gettoken',
+    telegram: 'https://api.telegram.org/bot',
+    discord: 'https://discord.com/api/v10',
+    slack: 'https://slack.com/api',
+  };
+  return baseUrlMap[template.id] || null;
+}
+
 export async function channelRoutes(app: FastifyInstance) {
   // 获取通道模板列表
   app.get('/templates', { preHandler: [authMiddleware] }, async () => {
@@ -136,42 +144,55 @@ export async function channelRoutes(app: FastifyInstance) {
     const channels = await db`
       SELECT * FROM channels
       WHERE user_id = ${userId}
-      ORDER BY is_default DESC, created_at DESC
+      ORDER BY is_active DESC, created_at DESC
     `;
 
-    return { data: channels };
+    // 将 auth_value 转换为 config 对象
+    const channelsWithConfig = channels.map((channel: any) => ({
+      ...channel,
+      config: channel.auth_value ? JSON.parse(channel.auth_value) : {},
+    }));
+
+    return { data: channelsWithConfig };
   });
 
   // 添加通道
   app.post('/', { preHandler: [authMiddleware] }, async (request: FastifyRequest<{ Body: AddChannelBody }>) => {
     const db = getSql();
     const userId = (request.user as any).id;
-    const { name, channel_type, base_url, auth_type, app_id, app_secret, bot_name, webhook_url, is_default } = request.body;
+    const { name, type, config = {} } = request.body;
 
-    if (!channel_type) {
+    if (!type) {
       throw new Error('通道类型不能为空');
     }
 
-    // 如果设置为默认，先取消其他通道的默认状态
-    if (is_default) {
-      await db`
-        UPDATE channels SET is_default = false WHERE user_id = ${userId}
-      `;
-    }
+    // 将 config 对象转换为数据库字段
+    // auth_value 存储 JSON 字符串格式的完整配置
+    const authValue = JSON.stringify(config);
+
+    // 获取模板信息
+    const template = CHANNEL_TEMPLATES.find(t => t.id === type);
+    const baseUrl = template ? getTemplateBaseUrl(template) : null;
 
     const result = await db`
       INSERT INTO channels (
-        user_id, name, channel_type, base_url, auth_type,
-        app_id, app_secret, bot_name, webhook_url, is_default
+        user_id, name, channel_type, base_url, auth_value, is_active
       )
       VALUES (
-        ${userId}, ${name || null}, ${channel_type}, ${base_url || null}, ${auth_type || null},
-        ${app_id || null}, ${app_secret || null}, ${bot_name || null}, ${webhook_url || null}, ${is_default || false}
+        ${userId}, ${name || null}, ${type}, ${baseUrl}, ${authValue}, true
       )
       RETURNING *
     `;
 
-    return { data: result[0], message: '通道添加成功' };
+    // 返回时解密 config
+    const channel = result[0];
+    return {
+      data: {
+        ...channel,
+        config: channel.auth_value ? JSON.parse(channel.auth_value) : {},
+      },
+      message: '通道添加成功',
+    };
   });
 
   // 获取通道详情
@@ -189,7 +210,13 @@ export async function channelRoutes(app: FastifyInstance) {
       throw new Error('通道不存在');
     }
 
-    return { data: channels[0] };
+    const channel = channels[0];
+    return {
+      data: {
+        ...channel,
+        config: channel.auth_value ? JSON.parse(channel.auth_value) : {},
+      },
+    };
   });
 
   // 更新通道
@@ -197,26 +224,21 @@ export async function channelRoutes(app: FastifyInstance) {
     const db = getSql();
     const userId = (request.user as any).id;
     const { id } = request.params;
-    const { name, channel_type, base_url, auth_type, app_id, app_secret, bot_name, webhook_url, is_default } = request.body;
+    const { name, type, config = {} } = request.body;
 
-    // 如果设置为默认，先取消其他通道的默认状态
-    if (is_default) {
-      await db`
-        UPDATE channels SET is_default = false WHERE user_id = ${userId} AND id != ${id}
-      `;
-    }
+    // 将 config 对象转换为数据库字段
+    const authValue = JSON.stringify(config);
+
+    // 获取模板信息
+    const template = CHANNEL_TEMPLATES.find(t => t.id === type);
+    const baseUrl = template ? getTemplateBaseUrl(template) : null;
 
     const result = await db`
       UPDATE channels
       SET name = ${name || null},
-          channel_type = ${channel_type},
-          base_url = ${base_url || null},
-          auth_type = ${auth_type || null},
-          app_id = ${app_id || null},
-          app_secret = ${app_secret || null},
-          bot_name = ${bot_name || null},
-          webhook_url = ${webhook_url || null},
-          is_default = ${is_default || false},
+          channel_type = ${type},
+          base_url = ${baseUrl},
+          auth_value = ${authValue},
           updated_at = NOW()
       WHERE id = ${id} AND user_id = ${userId}
       RETURNING *
@@ -226,7 +248,14 @@ export async function channelRoutes(app: FastifyInstance) {
       throw new Error('通道不存在或无权限');
     }
 
-    return { data: result[0], message: '通道更新成功' };
+    const channel = result[0];
+    return {
+      data: {
+        ...channel,
+        config: channel.auth_value ? JSON.parse(channel.auth_value) : {},
+      },
+      message: '通道更新成功',
+    };
   });
 
   // 删除通道
@@ -255,7 +284,7 @@ export async function channelRoutes(app: FastifyInstance) {
     const { id } = request.params as { id: string };
 
     const channels = await db`
-      SELECT channel_type, app_id, webhook_url FROM channels
+      SELECT channel_type, auth_value, base_url FROM channels
       WHERE id = ${id} AND user_id = ${userId}
     `;
 
@@ -264,12 +293,122 @@ export async function channelRoutes(app: FastifyInstance) {
     }
 
     const channel = channels[0];
-    // TODO: 实现实际的通道连接测试
-    return {
-      success: true,
-      message: `通道连接测试成功：${channel.channel_type}`
-    };
+    const config = channel.auth_value ? JSON.parse(channel.auth_value) : {};
+
+    // 根据不同通道类型实现实际连接测试
+    try {
+      let testResult: { success: boolean; message: string };
+
+      switch (channel.channel_type) {
+        case 'feishu':
+          testResult = await testFeishuConnection(config, channel.base_url);
+          break;
+        case 'dingtalk':
+          testResult = await testDingtalkConnection(config, channel.base_url);
+          break;
+        case 'wecom':
+          testResult = await testWecomConnection(config, channel.base_url);
+          break;
+        case 'telegram':
+          testResult = await testTelegramConnection(config);
+          break;
+        default:
+          testResult = { success: true, message: `通道类型 ${channel.channel_type} 暂不支持测试` };
+      }
+
+      // 更新健康检查时间
+      if (testResult.success) {
+        await db`
+          UPDATE channels SET last_health_at = NOW(), health_status = 'healthy'
+          WHERE id = ${id}
+        `;
+      } else {
+        await db`
+          UPDATE channels SET health_status = 'unhealthy' WHERE id = ${id}
+        `;
+      }
+
+      return testResult;
+    } catch (err: any) {
+      await db`
+        UPDATE channels SET health_status = 'unhealthy' WHERE id = ${id}
+      `;
+      return { success: false, message: '连接测试失败：' + err.message };
+    }
   });
+
+  // 飞书连接测试
+  async function testFeishuConnection(config: any, baseUrl: string): Promise<{ success: boolean; message: string }> {
+    const { app_id, app_secret } = config;
+    if (!app_id || !app_secret) {
+      return { success: false, message: '缺少 App ID 或 App Secret' };
+    }
+
+    const response = await fetch(baseUrl || 'https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ app_id, app_secret }),
+    });
+
+    const data: any = await response.json();
+    if (data.code === 0 || data.Ok) {
+      return { success: true, message: '飞书连接测试成功' };
+    }
+    return { success: false, message: `飞书连接失败：${data.msg || data.message}` };
+  }
+
+  // 钉钉连接测试
+  async function testDingtalkConnection(config: any, baseUrl: string): Promise<{ success: boolean; message: string }> {
+    const { app_key, app_secret } = config;
+    if (!app_key || !app_secret) {
+      return { success: false, message: '缺少 AppKey 或 AppSecret' };
+    }
+
+    const response = await fetch(baseUrl || 'https://api.dingtalk.com/v1.0/oauth2/accessToken', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ appkey: app_key, appsecret: app_secret }),
+    });
+
+    const data: any = await response.json();
+    if (data.errcode === 0 || data.access_token) {
+      return { success: true, message: '钉钉连接测试成功' };
+    }
+    return { success: false, message: `钉钉连接失败：${data.errmsg || data.message}` };
+  }
+
+  // 企业微信连接测试
+  async function testWecomConnection(config: any, baseUrl: string): Promise<{ success: boolean; message: string }> {
+    const { corp_id, agent_id, secret } = config;
+    if (!corp_id || !secret) {
+      return { success: false, message: '缺少企业 ID 或 Secret' };
+    }
+
+    const url = baseUrl || `https://qyapi.weixin.qq.com/cgi-bin/gettoken?corpid=${corp_id}&corpsecret=${secret}`;
+    const response = await fetch(url);
+
+    const data: any = await response.json();
+    if (data.errcode === 0 || data.access_token) {
+      return { success: true, message: '企业微信连接测试成功' };
+    }
+    return { success: false, message: `企业微信连接失败：${data.errmsg || data.message}` };
+  }
+
+  // Telegram 连接测试
+  async function testTelegramConnection(config: any): Promise<{ success: boolean; message: string }> {
+    const { bot_token } = config;
+    if (!bot_token) {
+      return { success: false, message: '缺少 Bot Token' };
+    }
+
+    const response = await fetch(`https://api.telegram.org/bot${bot_token}/getMe`);
+    const data: any = await response.json();
+
+    if (data.ok) {
+      return { success: true, message: `Telegram 连接测试成功：@${data.result?.username}` };
+    }
+    return { success: false, message: `Telegram 连接失败：${data.description}` };
+  }
 
   // 通道健康检查
   app.post('/:id/health', { preHandler: [authMiddleware] }, async (request) => {
@@ -302,11 +441,11 @@ export async function channelRoutes(app: FastifyInstance) {
     // 返回模板的默认配置，方便前端填充表单
     return {
       data: {
-        channel_type: template.id,
+        type: template.id,
         name: template.name,
-        base_url: null,
-        auth_type: 'oauth2'
-      }
+        base_url: getTemplateBaseUrl(template),
+        config_fields: template.config_fields,
+      },
     };
   });
 }

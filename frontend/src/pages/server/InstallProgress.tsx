@@ -4,30 +4,26 @@ import { openclawService } from '@/services/api';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 
-interface TaskStep {
-  id: string;
-  name: string;
-  status: 'pending' | 'running' | 'completed' | 'error';
-  message?: string;
-}
-
 export default function InstallProgress() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [task, setTask] = useState<any>(null);
-  const [steps, setSteps] = useState<TaskStep[]>([
-    { id: '1', name: '环境检测', status: 'pending' },
-    { id: '2', name: '依赖安装', status: 'pending' },
-    { id: '3', name: '下载 OpenClaw', status: 'pending' },
-    { id: '4', name: '部署与初始化', status: 'pending' },
-    { id: '5', name: '服务启动', status: 'pending' },
-    { id: '6', name: '状态校验', status: 'pending' },
-  ]);
+  const [currentStep, setCurrentStep] = useState(1);
   const [logs, setLogs] = useState<string[]>([]);
+  const [status, setStatus] = useState<'running' | 'completed' | 'failed' | 'cancelled'>('running');
   const [isPolling, setIsPolling] = useState(true);
 
+  const steps = [
+    { id: '1', name: '检查服务器环境' },
+    { id: '2', name: '执行 OpenClaw 安装脚本' },
+    { id: '3', name: '验证安装' },
+    { id: '4', name: '检查服务状态' },
+    { id: '5', name: '检查服务日志' },
+    { id: '6', name: '安装完成' },
+  ];
+
   useEffect(() => {
-    // 模拟安装任务开始
+    // 开始安装任务
     startInstall();
 
     // 轮询任务状态
@@ -44,13 +40,11 @@ export default function InstallProgress() {
     try {
       const { data } = await openclawService.install(id!);
       setTask(data);
-      setSteps(prev => prev.map((step, i) => ({
-        ...step,
-        status: i === 0 ? 'running' : 'pending',
-      })));
-      addLog('开始安装 OpenClaw...');
+      setCurrentStep(1);
+      setLogs(['开始安装 OpenClaw...', '正在连接服务器...']);
     } catch (err: any) {
-      addLog('启动安装失败：' + (err.response?.data?.message || '未知错误'));
+      setLogs(prev => [...prev, `[错误] 启动安装失败：${err.response?.data?.message || '未知错误'}`]);
+      setStatus('failed');
       setIsPolling(false);
     }
   };
@@ -60,45 +54,29 @@ export default function InstallProgress() {
     try {
       const { data } = await openclawService.getTask(task.id);
 
-      // 模拟进度更新
-      const completedCount = steps.filter(s => s.status === 'completed').length;
-      const runningIndex = steps.findIndex(s => s.status === 'running');
+      // 更新状态
+      setStatus(data.status);
+      setCurrentStep(data.currentStep || 1);
 
+      // 更新日志
+      if (data.logs && data.logs.length > 0) {
+        setLogs(data.logs);
+      }
+
+      // 检查完成状态
       if (data.status === 'completed') {
-        setSteps(prev => prev.map(s => ({ ...s, status: 'completed' })));
         setIsPolling(false);
-        addLog('安装完成！');
+        setLogs(prev => [...prev, '\n✅ 安装完成！']);
       } else if (data.status === 'failed') {
-        setSteps(prev => {
-          const newSteps = [...prev];
-          if (runningIndex >= 0) newSteps[runningIndex].status = 'error';
-          return newSteps;
-        });
         setIsPolling(false);
-        addLog('安装失败：' + (data.error || '未知错误'));
-      } else {
-        // 模拟进度推进
-        if (runningIndex >= 0 && completedCount < steps.length) {
-          setSteps(prev => {
-            const newSteps = [...prev];
-            // 随机完成当前步骤并进入下一步
-            if (Math.random() > 0.7) {
-              newSteps[runningIndex].status = 'completed';
-              if (runningIndex + 1 < steps.length) {
-                newSteps[runningIndex + 1].status = 'running';
-              }
-            }
-            return newSteps;
-          });
-        }
+        setLogs(prev => [...prev, `\n❌ 安装失败：${data.errorMessage || '未知错误'}`]);
+      } else if (data.status === 'cancelled') {
+        setIsPolling(false);
+        setLogs(prev => [...prev, '\n⚠️ 安装已取消']);
       }
     } catch (err) {
       console.error('Failed to load task status:', err);
     }
-  };
-
-  const addLog = (message: string) => {
-    setLogs(prev => [...prev, `[${new Date().toLocaleTimeString()}] ${message}`]);
   };
 
   const handleCancel = async () => {
@@ -106,54 +84,40 @@ export default function InstallProgress() {
     try {
       await openclawService.cancelTask(task.id);
       setIsPolling(false);
-      addLog('安装已取消');
+      setStatus('cancelled');
+      setLogs(prev => [...prev, '⚠️ 安装已取消']);
     } catch (err: any) {
-      addLog('取消失败：' + (err.response?.data?.message || '未知错误'));
+      setLogs(prev => [...prev, `[错误] 取消失败：${err.response?.data?.message || '未知错误'}`]);
     }
   };
 
-  const progress = steps.filter(s => s.status === 'completed').length;
-  const total = steps.length;
-  const percentage = Math.round((progress / total) * 100);
+  const percentage = Math.round(((currentStep - 1) / steps.length) * 100);
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case 'completed': return '✅';
-      case 'running': return '🔄';
-      case 'error': return '❌';
-      default: return '⏳';
-    }
-  };
-
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'completed': return 'text-green-600';
-      case 'running': return 'text-blue-600';
-      case 'error': return 'text-red-600';
-      default: return 'text-zinc-400';
-    }
+  const getStatusIcon = () => {
+    if (status === 'completed') return '✅';
+    if (status === 'failed') return '❌';
+    if (status === 'cancelled') return '⚠️';
+    return '🔄';
   };
 
   return (
-    <div>
+    <div className="max-w-4xl mx-auto">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900">OpenClaw 安装进度</h1>
-          <p className="text-sm text-zinc-500 mt-1">服务器 ID: {id}</p>
+          <p className="text-sm text-zinc-500 mt-1">
+            服务器 ID: {id} {status === 'running' && '(安装中...)'}
+          </p>
         </div>
         <div className="flex gap-2">
           {isPolling && (
             <Button variant="outline" onClick={handleCancel} className="gap-2">
-              <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z" />
-              </svg>
-              取消
+              取消安装
             </Button>
           )}
-          {!isPolling && steps.every(s => s.status === 'completed') && (
+          {!isPolling && status === 'completed' && (
             <Button onClick={() => navigate(`/openclaw/${id}`)} className="gap-2">
-              查看详情
+              管理 OpenClaw
               <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
               </svg>
@@ -162,68 +126,92 @@ export default function InstallProgress() {
         </div>
       </div>
 
-      <div className="grid gap-6 md:grid-cols-3">
-        {/* Progress */}
-        <Card className="md:col-span-2">
-          <div className="mb-6">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-sm font-medium text-zinc-700">总体进度</span>
-              <span className="text-sm text-zinc-500">{percentage}% ({progress}/{total} 步骤完成)</span>
-            </div>
-            <div className="h-3 bg-zinc-100 rounded-full overflow-hidden">
-              <div
-                className="h-full bg-gradient-to-r from-blue-600 to-purple-600 transition-all duration-500"
-                style={{ width: `${percentage}%` }}
-              />
-            </div>
+      <Card className="mb-6">
+        <div className="mb-6">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-sm font-medium text-zinc-700">总体进度</span>
+            <span className="text-sm text-zinc-500">{percentage}% (步骤 {currentStep}/{steps.length})</span>
           </div>
+          <div className="h-3 bg-zinc-100 rounded-full overflow-hidden">
+            <div
+              className={`h-full transition-all duration-500 ${
+                status === 'failed' ? 'bg-red-600' :
+                status === 'completed' ? 'bg-green-600' :
+                'bg-gradient-to-r from-blue-600 to-purple-600'
+              }`}
+              style={{ width: `${percentage}%` }}
+            />
+          </div>
+        </div>
 
-          <div className="space-y-3">
-            {steps.map((step, index) => (
+        <div className="space-y-2">
+          {steps.map((step, index) => {
+            const stepIndex = index + 1;
+            const isCurrent = stepIndex === currentStep;
+            const isCompleted = stepIndex < currentStep;
+            const isFailed = status === 'failed' && isCurrent;
+
+            return (
               <div
                 key={step.id}
-                className={`flex items-center gap-3 p-3 rounded-lg ${
-                  step.status === 'running' ? 'bg-blue-50' :
-                  step.status === 'completed' ? 'bg-green-50' :
-                  step.status === 'error' ? 'bg-red-50' :
-                  'bg-zinc-50'
+                className={`flex items-center gap-3 p-3 rounded-lg border ${
+                  isFailed ? 'bg-red-50 border-red-200' :
+                  isCurrent ? 'bg-blue-50 border-blue-200' :
+                  isCompleted ? 'bg-green-50 border-green-200' :
+                  'bg-zinc-50 border-zinc-200'
                 }`}
               >
-                <span className={`text-lg ${getStatusColor(step.status)}`}>
-                  {getStatusIcon(step.status)}
+                <span className={`text-lg ${
+                  isFailed ? 'text-red-600' :
+                  isCurrent ? 'text-blue-600' :
+                  isCompleted ? 'text-green-600' :
+                  'text-zinc-400'
+                }`}>
+                  {isCompleted ? '✅' : isCurrent ? '🔄' : '⏳'}
                 </span>
-                <div className="flex-1">
-                  <p className={`font-medium ${getStatusColor(step.status)}`}>
-                    步骤 {index + 1}: {step.name}
-                  </p>
-                  {step.message && (
-                    <p className="text-sm text-zinc-500 mt-0.5">{step.message}</p>
-                  )}
-                </div>
-                {step.status === 'running' && (
-                  <svg className="animate-spin h-5 w-5 text-blue-600" fill="none" viewBox="0 0 24 24">
+                <span className={`font-medium ${
+                  isFailed ? 'text-red-600' :
+                  isCurrent ? 'text-blue-600' :
+                  isCompleted ? 'text-green-600' :
+                  'text-zinc-700'
+                }`}>
+                  步骤 {stepIndex}: {step.name}
+                </span>
+                {isCurrent && status === 'running' && (
+                  <svg className="animate-spin h-4 w-4 text-blue-600 ml-auto" fill="none" viewBox="0 0 24 24">
                     <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                     <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
                   </svg>
                 )}
               </div>
-            ))}
-          </div>
-        </Card>
+            );
+          })}
+        </div>
+      </Card>
 
-        {/* Logs */}
-        <Card title="安装日志">
-          <div className="h-64 overflow-y-auto font-mono text-xs bg-zinc-900 text-zinc-100 rounded-lg p-3">
-            {logs.length === 0 ? (
-              <p className="text-zinc-500">等待日志...</p>
-            ) : (
-              logs.map((log, i) => (
-                <div key={i} className="py-0.5">{log}</div>
-              ))
-            )}
-          </div>
-        </Card>
-      </div>
+      <Card title="安装日志 (实时)">
+        <div className="h-96 overflow-y-auto font-mono text-xs bg-zinc-900 text-zinc-100 rounded-lg p-4">
+          {logs.length === 0 ? (
+            <p className="text-zinc-500">等待日志...</p>
+          ) : (
+            logs.map((log, i) => (
+              <div key={i} className="py-0.5 whitespace-pre-wrap">
+                {log.startsWith('[错误]') ? (
+                  <span className="text-red-400">{log}</span>
+                ) : log.startsWith('✅') || log.startsWith('✓') ? (
+                  <span className="text-green-400">{log}</span>
+                ) : log.startsWith('⚠️') ? (
+                  <span className="text-yellow-400">{log}</span>
+                ) : log.startsWith('❌') ? (
+                  <span className="text-red-400">{log}</span>
+                ) : (
+                  <span className="text-zinc-100">{log}</span>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
     </div>
   );
 }

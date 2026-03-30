@@ -52,16 +52,20 @@ export const serverService = {
   update: (id: string, data: any) => api.put(`/servers/${id}`, data),
   delete: (id: string) => api.delete(`/servers/${id}`),
   testConnection: (id: string) => api.post(`/servers/${id}/ssh-test`),
+  verifyCredentials: (id: string) => api.post(`/servers/${id}/verify-credentials`),
+  batchVerifyAll: () => api.post('/servers/batch/verify-all'),
   reboot: (id: string) => api.post(`/servers/${id}/reboot`),
   shutdown: (id: string) => api.post(`/servers/${id}/shutdown`),
   refresh: (id: string) => api.post(`/servers/${id}/refresh`),
   batchReboot: (ids: string[]) => api.post('/servers/batch/reboot', { ids }),
   batchShutdown: (ids: string[]) => api.post('/servers/batch/shutdown', { ids }),
   getMetrics: (id: string) => api.get(`/servers/${id}/metrics`),
+  executeCommand: (id: string, command: string) => api.post(`/servers/${id}/execute`, { command }),
 };
 
 export const openclawService = {
-  install: (serverId: string) => api.post('/openclaw/install', { serverId }),
+  install: (serverId: string) => api.post('/openclaw/install', { server_id: serverId }),
+  checkEnv: (serverId: string) => api.post(`/openclaw/${serverId}/check-env`),
   getTask: (taskId: string) => api.get(`/openclaw/tasks/${taskId}`),
   cancelTask: (taskId: string) => api.post(`/openclaw/tasks/${taskId}/cancel`),
   uploadPackage: (file: File) => {
@@ -72,6 +76,8 @@ export const openclawService = {
     });
   },
   getStatus: (serverId: string) => api.get(`/openclaw/${serverId}/status`),
+  checkVersion: (serverId: string) => api.get(`/openclaw/${serverId}/version`),
+  update: (serverId: string) => api.post(`/openclaw/${serverId}/update`),
   start: (serverId: string) => api.post(`/openclaw/${serverId}/start`),
   stop: (serverId: string) => api.post(`/openclaw/${serverId}/stop`),
   restart: (serverId: string) => api.post(`/openclaw/${serverId}/restart`),

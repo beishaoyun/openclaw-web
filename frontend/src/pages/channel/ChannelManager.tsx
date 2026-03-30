@@ -15,20 +15,29 @@ interface Channel {
   createdAt: string;
 }
 
+interface ChannelTemplate {
+  id: string;
+  name: string;
+  description: string;
+}
+
 export default function ChannelManager() {
   const [channels, setChannels] = useState<Channel[]>([]);
+  const [templates, setTemplates] = useState<ChannelTemplate[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
+  const [selectedTemplate, setSelectedTemplate] = useState('');
   const [formData, setFormData] = useState({
     name: '',
-    type: 'http',
-    url: '',
-    timeout: 30,
+    type: 'feishu',
+    config: {} as Record<string, any>,
   });
   const [error, setError] = useState('');
 
   useEffect(() => {
     loadChannels();
+    loadTemplates();
   }, []);
 
   const loadChannels = async () => {
@@ -44,16 +53,36 @@ export default function ChannelManager() {
     }
   };
 
+  const loadTemplates = async () => {
+    try {
+      const response = await channelService.getTemplates();
+      setTemplates(response.data?.data || []);
+    } catch (err) {
+      console.error('Failed to load templates:', err);
+    }
+  };
+
+  const handleUseTemplate = (templateId: string) => {
+    setSelectedTemplate(templateId);
+    const template = templates.find(t => t.id === templateId);
+    if (template) {
+      setFormData({
+        name: template.name,
+        type: templateId,
+        config: {},
+      });
+      setShowTemplateModal(false);
+      setShowAddModal(true);
+    }
+  };
+
   const handleAdd = async () => {
     setError('');
     try {
       await channelService.add({
         name: formData.name,
         type: formData.type,
-        config: {
-          url: formData.url,
-          timeout: formData.timeout,
-        },
+        config: formData.config,
       });
       setShowAddModal(false);
       loadChannels();
@@ -93,11 +122,30 @@ export default function ChannelManager() {
 
   const getTypeColor = (type: string) => {
     switch (type) {
-      case 'http': return 'bg-blue-100 text-blue-600';
-      case 'websocket': return 'bg-purple-100 text-purple-600';
-      case 'grpc': return 'bg-green-100 text-green-600';
+      case 'feishu': return 'bg-blue-100 text-blue-600';
+      case 'dingtalk': return 'bg-cyan-100 text-cyan-600';
+      case 'wechat': return 'bg-green-100 text-green-600';
+      case 'wecom': return 'bg-emerald-100 text-emerald-600';
+      case 'qq': return 'bg-orange-100 text-orange-600';
+      case 'telegram': return 'bg-sky-100 text-sky-600';
+      case 'discord': return 'bg-indigo-100 text-indigo-600';
+      case 'slack': return 'bg-purple-100 text-purple-600';
       default: return 'bg-zinc-100 text-zinc-600';
     }
+  };
+
+  const getTypeName = (type: string) => {
+    const names: Record<string, string> = {
+      feishu: '飞书',
+      dingtalk: '钉钉',
+      wechat: '微信',
+      wecom: '企业微信',
+      qq: 'QQ',
+      telegram: 'Telegram',
+      discord: 'Discord',
+      slack: 'Slack',
+    };
+    return names[type] || type;
   };
 
   return (
@@ -105,14 +153,22 @@ export default function ChannelManager() {
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-bold text-zinc-900">通道管理</h1>
-          <p className="text-sm text-zinc-500 mt-1">配置数据通信通道</p>
+          <p className="text-sm text-zinc-500 mt-1">配置飞书、钉钉、微信等消息通道</p>
         </div>
-        <Button onClick={() => setShowAddModal(true)} className="gap-2">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
-          </svg>
-          新建通道
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setShowTemplateModal(true)} className="gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z" />
+            </svg>
+            从模板创建
+          </Button>
+          <Button onClick={() => setShowAddModal(true)} className="gap-2">
+            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
+            </svg>
+            新建通道
+          </Button>
+        </div>
       </div>
 
       {isLoading ? (
@@ -195,15 +251,35 @@ export default function ChannelManager() {
       )}
 
       <Modal
+        isOpen={showTemplateModal}
+        onClose={() => setShowTemplateModal(false)}
+        title="选择通道模板"
+        description="选择一个预设模板快速创建通道"
+      >
+        <div className="space-y-3 py-4">
+          {templates.map((template) => (
+            <button
+              key={template.id}
+              onClick={() => handleUseTemplate(template.id)}
+              className="w-full p-4 text-left border rounded-lg hover:bg-zinc-50 transition-colors"
+            >
+              <div className="font-medium text-zinc-900">{template.name}</div>
+              <div className="text-sm text-zinc-500 mt-1">{template.description}</div>
+            </button>
+          ))}
+        </div>
+      </Modal>
+
+      <Modal
         isOpen={showAddModal}
         onClose={() => setShowAddModal(false)}
         title="新建通道"
-        description="配置通信通道参数"
+        description="配置通道参数"
       >
         <div className="space-y-4 py-4">
           <Input
             label="通道名称"
-            placeholder="例如：主数据通道"
+            placeholder="例如：飞书通知通道"
             value={formData.name}
             onChange={(e) => setFormData({ ...formData, name: e.target.value })}
             required
@@ -217,26 +293,106 @@ export default function ChannelManager() {
               onChange={(e) => setFormData({ ...formData, type: e.target.value })}
               className="w-full px-3 py-2 border border-zinc-300 rounded-md focus:outline-none focus:ring-2 focus:ring-zinc-900"
             >
-              <option value="http">HTTP/HTTPS</option>
-              <option value="websocket">WebSocket</option>
-              <option value="grpc">gRPC</option>
+              <option value="feishu">飞书</option>
+              <option value="dingtalk">钉钉</option>
+              <option value="wechat">微信</option>
+              <option value="wecom">企业微信</option>
+              <option value="qq">QQ</option>
+              <option value="telegram">Telegram</option>
+              <option value="discord">Discord</option>
+              <option value="slack">Slack</option>
             </select>
           </div>
-          <Input
-            label="目标 URL"
-            placeholder="https://api.example.com/webhook"
-            value={formData.url}
-            onChange={(e) => setFormData({ ...formData, url: e.target.value })}
-            required
-          />
-          <Input
-            label="超时时间 (秒)"
-            type="number"
-            value={formData.timeout}
-            onChange={(e) => setFormData({ ...formData, timeout: parseInt(e.target.value) })}
-            min={1}
-            max={300}
-          />
+          {formData.type === 'feishu' && (
+            <>
+              <Input
+                label="App ID"
+                placeholder="cli_..."
+                value={formData.config.app_id || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, app_id: e.target.value } })}
+                required
+              />
+              <Input
+                label="App Secret"
+                type="password"
+                placeholder="..."
+                value={formData.config.app_secret || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, app_secret: e.target.value } })}
+                required
+              />
+            </>
+          )}
+          {formData.type === 'dingtalk' && (
+            <>
+              <Input
+                label="App Key"
+                placeholder="..."
+                value={formData.config.app_key || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, app_key: e.target.value } })}
+                required
+              />
+              <Input
+                label="App Secret"
+                type="password"
+                placeholder="..."
+                value={formData.config.app_secret || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, app_secret: e.target.value } })}
+                required
+              />
+            </>
+          )}
+          {formData.type === 'wechat' && (
+            <>
+              <Input
+                label="Corp ID"
+                placeholder="..."
+                value={formData.config.corp_id || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, corp_id: e.target.value } })}
+                required
+              />
+              <Input
+                label="Agent ID"
+                placeholder="..."
+                value={formData.config.agent_id || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, agent_id: e.target.value } })}
+                required
+              />
+              <Input
+                label="Secret"
+                type="password"
+                placeholder="..."
+                value={formData.config.secret || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, secret: e.target.value } })}
+                required
+              />
+            </>
+          )}
+          {formData.type === 'wecom' && (
+            <>
+              <Input
+                label="Corp ID"
+                placeholder="..."
+                value={formData.config.corp_id || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, corp_id: e.target.value } })}
+                required
+              />
+              <Input
+                label="Agent ID"
+                placeholder="..."
+                value={formData.config.agent_id || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, agent_id: e.target.value } })}
+                required
+              />
+              <Input
+                label="Secret"
+                type="password"
+                placeholder="..."
+                value={formData.config.secret || ''}
+                onChange={(e) => setFormData({ ...formData, config: { ...formData.config, secret: e.target.value } })}
+                required
+              />
+            </>
+          )}
           {error && <p className="text-sm text-red-500">{error}</p>}
         </div>
         <div className="flex justify-end gap-3 pt-4 border-t">

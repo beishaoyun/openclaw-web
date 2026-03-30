@@ -13,6 +13,7 @@ export default function Register() {
     password: '',
     confirmPassword: '',
     captcha: '',
+    captchaId: '',
   });
   const [captchaImage, setCaptchaImage] = useState('');
   const [passwordError, setPasswordError] = useState('');
@@ -43,6 +44,7 @@ export default function Register() {
     try {
       const { data } = await authService.captcha();
       setCaptchaImage(`data:image/svg+xml;base64,${data.image}`);
+      setFormData(prev => ({ ...prev, captchaId: data.captchaId, captcha: '' }));
     } catch (err) {
       console.error('Failed to load captcha:', err);
     }
@@ -74,13 +76,21 @@ export default function Register() {
     setError('');
 
     try {
-      await authService.register({
+      // 注册成功直接登录并获取 token
+      const { data } = await authService.register({
         account: formData.account,
         email: formData.email,
         password: formData.password,
-        captcha: formData.captcha,
+        captchaId: formData.captchaId,
+        captchaText: formData.captcha,
       });
-      navigate('/login');
+
+      // 自动登录 - 保存 token 和用户信息
+      localStorage.setItem('token', data.token);
+      // 使用后端返回的实际用户信息
+      const user = data.user || { id: data.id, email: data.email };
+      localStorage.setItem('user', JSON.stringify(user));
+      window.location.href = '/';
     } catch (err: any) {
       setError(err.response?.data?.message || '注册失败');
       loadCaptcha();
